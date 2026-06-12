@@ -1,4 +1,4 @@
-// api/cek-ongkir.js (final, dengan penanganan env)
+// api/cek-ongkir.js
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'application/json');
@@ -11,12 +11,13 @@ export default async function handler(req, res) {
     return res.status(400).json({ status: 'error', message: 'destinationAreaId tidak valid' });
   }
   if (isNaN(weight) || weight < 100 || weight > 50000) {
-    return res.status(400).json({ status: 'error', message: 'Berat tidak valid (100-50000 gram)' });
+    return res.status(400).json({ status: 'error', message: 'Berat tidak valid (min 100g, max 50000g)' });
   }
 
-  let apiKey = process.env.BITESHIP_API_KEY;
+  const apiKey = process.env.BITESHIP_API_KEY;
   let originId = process.env.ORIGIN_AREA_ID;
-  // Fallback: jika originId tidak ada di env, bisa dari query param (untuk sementara)
+  
+  // Jika tidak ada di env, coba dari query parameter (opsional untuk debugging)
   if (!originId && req.query.originAreaId) {
     originId = req.query.originAreaId;
   }
@@ -36,7 +37,7 @@ export default async function handler(req, res) {
         origin_area_id: originId,
         destination_area_id: destId,
         couriers: 'jnt,wahana,idexpress',
-        items: [{ name: 'Sprei KasurKita', value: 100000, weight, quantity: 1 }]
+        items: [{ name: 'Sprei KasurKita', value: 100000, weight: weight, quantity: 1 }]
       })
     });
     const data = await response.json();
