@@ -1,4 +1,4 @@
-// api/cek-ongkir.js - Cek ongkir via Biteship
+// api/cek-ongkir.js
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'application/json');
@@ -18,13 +18,21 @@ export default async function handler(req, res) {
     const response = await fetch('https://api.biteship.com/v1/rates/couriers', {
       method: 'POST',
       headers: { Authorization: apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ origin_area_id: originId, destination_area_id: destId, couriers: 'jnt,wahana,idexpress', items: [{ name: 'Sprei KasurKita', value: 100000, weight, quantity: 1 }] })
+      body: JSON.stringify({
+        origin_area_id: originId, destination_area_id: destId, couriers: 'jnt,wahana,idexpress',
+        items: [{ name: 'Sprei KasurKita', value: 100000, weight, quantity: 1 }]
+      })
     });
     const data = await response.json();
     if (!data.success) return res.status(400).json({ status: 'error', message: 'Tidak ada kurir tersedia' });
-    const couriers = data.pricing.map(c => ({ courier_code: c.courier_code, courier_service_code: c.courier_service_code, courier_name: c.courier_name, courier_service_name: c.courier_service_name, price: c.price, duration: c.duration || '-' }));
+    const couriers = data.pricing.map(c => ({
+      courier_code: c.courier_code, courier_service_code: c.courier_service_code,
+      courier_name: c.courier_name, courier_service_name: c.courier_service_name,
+      price: c.price, duration: c.duration || '-'
+    }));
     return res.status(200).json({ status: 'success', couriers });
   } catch (err) {
+    console.error('[cek-ongkir]', err.message);
     return res.status(500).json({ status: 'error', message: err.message });
   }
 }
