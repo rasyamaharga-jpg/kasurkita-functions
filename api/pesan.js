@@ -1,25 +1,38 @@
-// api/pesan.js
+// api/pesan.js (dengan parser body yang lebih kuat)
 export default async function handler(req, res) {
-  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'application/json');
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') return res.status(405).json({ status: 'error', message: 'Method not allowed' });
 
-  // Baca body request (manual fallback jika req.body kosong)
-  let body = req.body;
-  if (!body || Object.keys(body).length === 0) {
-    try {
-      const rawBody = await new Promise((resolve, reject) => {
-        let data = '';
-        req.on('data', chunk => data += chunk);
-        req.on('end', () => resolve(data));
-        req.on('error', reject);
-      });
-      body = rawBody ? JSON.parse(rawBody) : {};
-    } catch (err) {
-      return res.status(400).json({ status: 'error', message: 'Body tidak valid: ' + err.message });
-    }
+  // Baca raw body terlebih dahulu
+  let rawBody = '';
+  try {
+    const buffers = [];
+    for await (const chunk of req) buffers.push(chunk);
+    rawBody = Buffer.concat(buffers).toString();
+  } catch (err) {
+    return res.status(400).json({ status: 'error', message: 'Gagal membaca body: ' + err.message });
+  }
+
+  // Bersihkan: hapus kutip diawal/akhir jika ada (misal jika body berupa string JSON yang dikutip)
+  let cleanBody = rawBody.trim();
+  if ((cleanBody.startsWith('"') && cleanBody.endsWith('"')) || 
+      (cleanBody.startsWith("'") && cleanBody.endsWith("'"))) {
+    cleanBody = cleanBody.slice(1, -1);
+  }
+  // Unescape jika perlu
+  cleanBody = cleanBody.replace(/\\"/g, '"');
+
+  let body;
+  try {
+    body = JSON.parse(cleanBody);
+  } catch (err) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'Body tidak valid JSON: ' + err.message,
+      raw: rawBody.substring(0, 100)
+    });
   }
 
   const { idVarian, idMotif, namaPembeli, noWhatsApp, alamat, kotaTujuan, jumlahBeli } = body;
@@ -37,7 +50,7 @@ export default async function handler(req, res) {
   supabaseUrl = supabaseUrl.replace(/\/rest\/v1\/?$/, '');
   const supabaseKey = process.env.SUPABASE_ANON_KEY;
   if (!supabaseUrl || !supabaseKey) {
-    return res.status(500).json({ status: 'error', message: 'Env tidak lengkap', hasUrl: !!supabaseUrl, hasKey: !!supabaseKey });
+    return res.status(500).json({ status: 'error', message: 'Env tidak lengkap' });
   }
 
   try {
