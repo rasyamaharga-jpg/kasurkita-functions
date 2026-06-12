@@ -1,10 +1,9 @@
-// api/admin.js - Final version with stok per motif
+// api/admin.js - Final dengan stok per motif
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
 const ADMIN_PASS = process.env.ADMIN_PASS;
 const GAS_URL = process.env.GAS_URL;
 
-// Bersihkan URL
 const cleanUrl = SUPABASE_URL.replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
 
 export default async function handler(req, res) {
@@ -15,12 +14,17 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ status: 'error', message: 'Method not allowed' });
 
+  // Parsing body (handle berbagai kemungkinan)
   let body = req.body;
   if (!body || typeof body !== 'object') {
-    try { body = JSON.parse(req.body); } catch (e) { return res.status(400).json({ status: 'error', message: 'Body tidak valid JSON' }); }
+    try {
+      body = JSON.parse(req.body);
+    } catch (e) {
+      return res.status(400).json({ status: 'error', message: 'Body tidak valid JSON: ' + e.message });
+    }
   }
 
-  // Verifikasi password
+  // Validasi password
   if (!body.adminPass || body.adminPass !== ADMIN_PASS) {
     await new Promise(r => setTimeout(r, 1000));
     return res.status(403).json({ status: 'error', message: 'Akses ditolak' });
@@ -49,7 +53,20 @@ export default async function handler(req, res) {
       return res.status(200).json({ status: 'success', pesanan });
     }
 
-    // ===== GET PRODUK + MOTIF (untuk keperluan admin tampilkan matriks) =====
+    // ===== GET PRODUK ADMIN (cara lama, tanpa motif) =====
+    if (action === 'getProdukAdmin') {
+      const r = await fetch(`${cleanUrl}/rest/v1/produk?select=*&order=lebar.asc,tinggi_kasur.asc`, {
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+      });
+      const data = await r.json();
+      const produk = data.map(p => ({
+        id: p.id_varian, nama: p.nama_produk, lebar: p.lebar, tinggi: p.tinggi_kasur,
+        harga: p.harga, stok: p.stok, aktif: p.aktif
+      }));
+      return res.status(200).json({ status: 'success', produk });
+    }
+
+    // ===== GET PRODUK DAN MOTIF (untuk matriks stok) =====
     if (action === 'getProdukDanMotif') {
       const [produkRes, motifRes] = await Promise.all([
         fetch(`${cleanUrl}/rest/v1/produk?select=id_varian,nama_produk,lebar,tinggi_kasur,harga&aktif=eq.true&order=lebar.asc,tinggi_kasur.asc`, {
@@ -64,13 +81,13 @@ export default async function handler(req, res) {
       return res.status(200).json({ status: 'success', produk, motif });
     }
 
-    // ===== GET STOK PER KOMBINASI =====
+    // ===== GET STOK PER MOTIF =====
     if (action === 'getStokPerMotif') {
       const r = await fetch(`${cleanUrl}/rest/v1/stok_produk?select=id_varian,id_motif,stok`, {
         headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
       });
-      const data = await r.json();
-      return res.status(200).json({ status: 'success', stok: data });
+      const stok = await r.json();
+      return res.status(200).json({ status: 'success', stok });
     }
 
     // ===== UPDATE STOK PER MOTIF =====
@@ -87,7 +104,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ status: 'success', idVarian, idMotif, stokBaru });
     }
 
-    // ===== UPDATE STATUS =====
+    // ===== UPDATE STATUS PESANAN =====
     if (action === 'updateStatus') {
       const { idPesanan, statusBaru } = body;
       const valid = ['Menunggu Pembayaran','Pembayaran Dikonfirmasi','Diproses','Dikirim','Selesai'];
@@ -103,7 +120,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ status: 'success', idPesanan, statusBaru });
     }
 
-    // ===== UPDATE STOK (cara lama, untuk kompatibilitas) =====
+    // ===== UPDATE STOK (cara lama, produk) =====
     if (action === 'updateStokAdmin') {
       const { idVarian, stokBaru } = body;
       await fetch(`${cleanUrl}/rest/v1/produk?id_varian=eq.${idVarian}`, {
