@@ -5,28 +5,40 @@ export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') return res.status(405).json({ status: 'error', message: 'Method not allowed' });
 
-  // Baca body
-  let body;
+  // Baca body (sama seperti di pesan.js)
+  let rawBody = '';
   try {
     const buffers = [];
     for await (const chunk of req) buffers.push(chunk);
-    const raw = Buffer.concat(buffers).toString();
-    body = JSON.parse(raw);
+    rawBody = Buffer.concat(buffers).toString();
   } catch (err) {
-    return res.status(400).json({ status: 'error', message: 'Body tidak valid' });
+    return res.status(400).json({ status: 'error', message: 'Gagal membaca body: ' + err.message });
+  }
+  let cleanBody = rawBody.trim();
+  if ((cleanBody.startsWith('"') && cleanBody.endsWith('"')) || 
+      (cleanBody.startsWith("'") && cleanBody.endsWith("'"))) {
+    cleanBody = cleanBody.slice(1, -1);
+  }
+  cleanBody = cleanBody.replace(/\\"/g, '"');
+  let body;
+  try {
+    body = JSON.parse(cleanBody);
+  } catch (err) {
+    return res.status(400).json({ status: 'error', message: 'Body tidak valid JSON: ' + err.message, raw: rawBody.substring(0, 100) });
   }
 
-  const { adminPass, action } = body;
+  const { adminPass, action, idPesanan, statusBaru, idVarian, stokBaru, noResi, kurir } = body;
   if (!adminPass || adminPass !== process.env.ADMIN_PASS) {
     await new Promise(r => setTimeout(r, 1000));
     return res.status(403).json({ status: 'error', message: 'Akses ditolak' });
   }
 
+  // Environment variables
   let supabaseUrl = process.env.SUPABASE_URL || '';
   supabaseUrl = supabaseUrl.replace(/\/rest\/v1\/?$/, '');
   const supabaseKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
   if (!supabaseUrl || !supabaseKey) {
-    return res.status(500).json({ status: 'error', message: 'Env tidak lengkap' });
+    return res.status(500).json({ status: 'error', message: 'Env Supabase tidak lengkap' });
   }
 
   try {
@@ -75,11 +87,9 @@ export default async function handler(req, res) {
     }
 
     if (action === 'updateStatus') {
-      const { idPesanan, statusBaru } = body;
+      if (!idPesanan || !statusBaru) return res.status(400).json({ status: 'error', message: 'idPesanan dan statusBaru diperlukan' });
       const valid = ['Menunggu Pembayaran','Pembayaran Dikonfirmasi','Diproses','Dikirim','Selesai'];
-      if (!idPesanan || !valid.includes(statusBaru)) {
-        return res.status(400).json({ status: 'error', message: 'Parameter tidak valid' });
-      }
+      if (!valid.includes(statusBaru)) return res.status(400).json({ status: 'error', message: 'Status tidak valid' });
       await fetch(`${supabaseUrl}/rest/v1/pesanan?id_pesanan=eq.${idPesanan}`, {
         method: 'PATCH',
         headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}`, 'Content-Type': 'application/json' },
@@ -89,10 +99,7 @@ export default async function handler(req, res) {
     }
 
     if (action === 'updateStokAdmin') {
-      const { idVarian, stokBaru } = body;
-      if (!idVarian || isNaN(stokBaru)) {
-        return res.status(400).json({ status: 'error', message: 'Parameter tidak valid' });
-      }
+      if (!idVarian || stokBaru === undefined) return res.status(400).json({ status: 'error', message: 'idVarian dan stokBaru diperlukan' });
       await fetch(`${supabaseUrl}/rest/v1/produk?id_varian=eq.${idVarian}`, {
         method: 'PATCH',
         headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}`, 'Content-Type': 'application/json' },
@@ -102,14 +109,11 @@ export default async function handler(req, res) {
     }
 
     if (action === 'simpanResi') {
-      const { idPesanan, noResi, kurir } = body;
-      if (!idPesanan || !noResi) {
-        return res.status(400).json({ status: 'error', message: 'Parameter tidak valid' });
-      }
+      if (!idPesanan || !noResi || !kurir) return res.status(400).json({ status: 'error', message: 'idPesanan, noResi, kurir diperlukan' });
       await fetch(`${supabaseUrl}/rest/v1/pesanan?id_pesanan=eq.${idPesanan}`, {
         method: 'PATCH',
         headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ no_resi: noResi, kurir: kurir || '', status: 'Dikirim' })
+        body: JSON.stringify({ no_resi: noResi, kurir, status: 'Dikirim' })
       });
       return res.status(200).json({ status: 'success', idPesanan, noResi, kurir });
     }
