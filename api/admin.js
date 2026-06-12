@@ -1,117 +1,135 @@
-// api/admin.js
+// api/admin.js - Final version with stok per motif
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
+const ADMIN_PASS = process.env.ADMIN_PASS;
+const GAS_URL = process.env.GAS_URL;
+
+// Bersihkan URL
+const cleanUrl = SUPABASE_URL.replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
+
 export default async function handler(req, res) {
+  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Content-Type', 'application/json');
-  if (req.method === 'OPTIONS') return res.status(204).end();
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ status: 'error', message: 'Method not allowed' });
 
-  // Baca body
-  let rawBody = '';
-  try {
-    const buffers = [];
-    for await (const chunk of req) buffers.push(chunk);
-    rawBody = Buffer.concat(buffers).toString();
-  } catch (err) {
-    return res.status(400).json({ status: 'error', message: 'Gagal membaca body: ' + err.message });
-  }
-  let cleanBody = rawBody.trim();
-  if ((cleanBody.startsWith('"') && cleanBody.endsWith('"')) || 
-      (cleanBody.startsWith("'") && cleanBody.endsWith("'"))) {
-    cleanBody = cleanBody.slice(1, -1);
-  }
-  cleanBody = cleanBody.replace(/\\"/g, '"');
-  let body;
-  try {
-    body = JSON.parse(cleanBody);
-  } catch (err) {
-    return res.status(400).json({ status: 'error', message: 'Body tidak valid JSON: ' + err.message });
+  let body = req.body;
+  if (!body || typeof body !== 'object') {
+    try { body = JSON.parse(req.body); } catch (e) { return res.status(400).json({ status: 'error', message: 'Body tidak valid JSON' }); }
   }
 
-  const { adminPass, action, idPesanan, statusBaru, idVarian, stokBaru, noResi, kurir } = body;
-
-  if (!adminPass || adminPass !== process.env.ADMIN_PASS) {
+  // Verifikasi password
+  if (!body.adminPass || body.adminPass !== ADMIN_PASS) {
     await new Promise(r => setTimeout(r, 1000));
     return res.status(403).json({ status: 'error', message: 'Akses ditolak' });
   }
 
-  let supabaseUrl = process.env.SUPABASE_URL || '';
-  supabaseUrl = supabaseUrl.replace(/\/rest\/v1\/?$/, '');
-  const supabaseKey = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !supabaseKey) {
-    return res.status(500).json({ status: 'error', message: 'Env Supabase tidak lengkap' });
-  }
+  const { action } = body;
 
   try {
+    // ===== VERIFY LOGIN =====
     if (action === 'verifyLogin') {
       return res.status(200).json({ status: 'success' });
     }
+
+    // ===== GET ALL PESANAN =====
     if (action === 'getAllPesanan') {
-      const result = await fetch(`${supabaseUrl}/rest/v1/pesanan?order=tanggal.desc`, {
-        headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` }
+      const r = await fetch(`${cleanUrl}/rest/v1/pesanan?select=*&order=tanggal.desc`, {
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
       });
-      const data = await result.json();
+      const data = await r.json();
       const pesanan = data.map(p => ({
-        idPesanan: p.id_pesanan,
-        tanggal: p.tanggal,
-        nama: p.nama_pembeli,
-        noWA: p.no_whatsapp,
-        idVarian: p.id_varian,
-        idMotif: p.id_motif,
-        jumlah: p.jumlah_beli,
-        totalHarga: p.total_harga,
-        alamat: p.alamat,
-        kotaTujuan: p.kota_tujuan || '-',
-        status: p.status || 'Menunggu Pembayaran',
-        noResi: p.no_resi || '',
-        kurir: p.kurir || ''
+        idPesanan: p.id_pesanan, tanggal: p.tanggal, nama: p.nama_pembeli, noWA: p.no_whatsapp,
+        idVarian: p.id_varian, idMotif: p.id_motif, jumlah: p.jumlah_beli, totalHarga: p.total_harga,
+        alamat: p.alamat, kotaTujuan: p.kota_tujuan || '-', status: p.status || 'Menunggu Pembayaran',
+        noResi: p.no_resi || '', kurir: p.kurir || ''
       }));
       return res.status(200).json({ status: 'success', pesanan });
     }
-    if (action === 'getProdukAdmin') {
-      const result = await fetch(`${supabaseUrl}/rest/v1/produk?order=lebar.asc,tinggi_kasur.asc`, {
-        headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` }
-      });
-      const data = await result.json();
-      const produk = data.map(p => ({
-        id: p.id_varian,
-        nama: p.nama_produk,
-        lebar: p.lebar,
-        tinggi: p.tinggi_kasur,
-        harga: p.harga,
-        stok: p.stok,
-        aktif: p.aktif
-      }));
-      return res.status(200).json({ status: 'success', produk });
+
+    // ===== GET PRODUK + MOTIF (untuk keperluan admin tampilkan matriks) =====
+    if (action === 'getProdukDanMotif') {
+      const [produkRes, motifRes] = await Promise.all([
+        fetch(`${cleanUrl}/rest/v1/produk?select=id_varian,nama_produk,lebar,tinggi_kasur,harga&aktif=eq.true&order=lebar.asc,tinggi_kasur.asc`, {
+          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+        }),
+        fetch(`${cleanUrl}/rest/v1/motif?select=id_motif,nama_motif&aktif=eq.true`, {
+          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+        })
+      ]);
+      const produk = await produkRes.json();
+      const motif = await motifRes.json();
+      return res.status(200).json({ status: 'success', produk, motif });
     }
+
+    // ===== GET STOK PER KOMBINASI =====
+    if (action === 'getStokPerMotif') {
+      const r = await fetch(`${cleanUrl}/rest/v1/stok_produk?select=id_varian,id_motif,stok`, {
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+      });
+      const data = await r.json();
+      return res.status(200).json({ status: 'success', stok: data });
+    }
+
+    // ===== UPDATE STOK PER MOTIF =====
+    if (action === 'updateStokPerMotif') {
+      const { idVarian, idMotif, stokBaru } = body;
+      if (!idVarian || !idMotif || stokBaru === undefined) {
+        return res.status(400).json({ status: 'error', message: 'idVarian, idMotif, stokBaru diperlukan' });
+      }
+      await fetch(`${cleanUrl}/rest/v1/stok_produk?id_varian=eq.${idVarian}&id_motif=eq.${idMotif}`, {
+        method: 'PATCH',
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stok: parseInt(stokBaru) })
+      });
+      return res.status(200).json({ status: 'success', idVarian, idMotif, stokBaru });
+    }
+
+    // ===== UPDATE STATUS =====
     if (action === 'updateStatus') {
-      if (!idPesanan || !statusBaru) return res.status(400).json({ status: 'error', message: 'idPesanan dan statusBaru diperlukan' });
+      const { idPesanan, statusBaru } = body;
       const valid = ['Menunggu Pembayaran','Pembayaran Dikonfirmasi','Diproses','Dikirim','Selesai'];
       if (!valid.includes(statusBaru)) return res.status(400).json({ status: 'error', message: 'Status tidak valid' });
-      await fetch(`${supabaseUrl}/rest/v1/pesanan?id_pesanan=eq.${idPesanan}`, {
-        method: 'PATCH', headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}`, 'Content-Type': 'application/json' },
+      await fetch(`${cleanUrl}/rest/v1/pesanan?id_pesanan=eq.${idPesanan}`, {
+        method: 'PATCH', headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: statusBaru })
       });
+      if (GAS_URL) {
+        fetch(GAS_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ action: 'syncUpdateStatus', idPesanan, statusBaru }) })
+          .catch(e => console.error('Sync GAS gagal:', e.message));
+      }
       return res.status(200).json({ status: 'success', idPesanan, statusBaru });
     }
+
+    // ===== UPDATE STOK (cara lama, untuk kompatibilitas) =====
     if (action === 'updateStokAdmin') {
-      if (!idVarian || stokBaru === undefined) return res.status(400).json({ status: 'error', message: 'idVarian dan stokBaru diperlukan' });
-      await fetch(`${supabaseUrl}/rest/v1/produk?id_varian=eq.${idVarian}`, {
-        method: 'PATCH', headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}`, 'Content-Type': 'application/json' },
+      const { idVarian, stokBaru } = body;
+      await fetch(`${cleanUrl}/rest/v1/produk?id_varian=eq.${idVarian}`, {
+        method: 'PATCH', headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ stok: parseInt(stokBaru) })
       });
       return res.status(200).json({ status: 'success', idVarian, stokBaru });
     }
+
+    // ===== SIMPAN RESI =====
     if (action === 'simpanResi') {
-      if (!idPesanan || !noResi || !kurir) return res.status(400).json({ status: 'error', message: 'idPesanan, noResi, kurir diperlukan' });
-      await fetch(`${supabaseUrl}/rest/v1/pesanan?id_pesanan=eq.${idPesanan}`, {
-        method: 'PATCH', headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}`, 'Content-Type': 'application/json' },
+      const { idPesanan, noResi, kurir } = body;
+      await fetch(`${cleanUrl}/rest/v1/pesanan?id_pesanan=eq.${idPesanan}`, {
+        method: 'PATCH', headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ no_resi: noResi, kurir, status: 'Dikirim' })
       });
+      if (GAS_URL) {
+        fetch(GAS_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ action: 'syncResi', idPesanan, noResi, kurir }) })
+          .catch(e => console.error('Sync GAS gagal:', e.message));
+      }
       return res.status(200).json({ status: 'success', idPesanan, noResi, kurir });
     }
+
     return res.status(400).json({ status: 'error', message: 'Action tidak dikenal' });
   } catch (err) {
     console.error('[admin]', err.message);
-    return res.status(500).json({ status: 'error', message: err.message });
+    return res.status(500).json({ status: 'error', message: 'Terjadi kesalahan: ' + err.message });
   }
 }
