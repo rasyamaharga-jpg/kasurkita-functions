@@ -1,4 +1,4 @@
-// api/admin.js
+// api/admin.js - versi GET dengan query parameter (tidak perlu body JSON)
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_ANON_KEY;
 const ADMIN_PASS = process.env.ADMIN_PASS;
@@ -6,52 +6,36 @@ const ADMIN_PASS = process.env.ADMIN_PASS;
 const cleanUrl = SUPABASE_URL.replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
 
 export default async function handler(req, res) {
-  // Set CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.status(200).end();
   
-  // Handle preflight
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-  
-  // Hanya menerima POST
-  if (req.method !== 'POST') {
-    return res.status(405).json({ status: 'error', message: 'Method not allowed' });
+  // Hanya menerima GET (karena lebih mudah untuk testing)
+  if (req.method !== 'GET') {
+    return res.status(405).json({ status: 'error', message: 'Method not allowed, use GET' });
   }
 
-  // Baca body (Vercel sudah parse jika Content-Type JSON)
-  let body = req.body;
-  if (!body || typeof body !== 'object') {
-    // Fallback jika req.body kosong (misal karena raw text)
-    try {
-      body = JSON.parse(req.body);
-    } catch (e) {
-      return res.status(400).json({ status: 'error', message: 'Body tidak valid JSON: ' + e.message });
-    }
-  }
+  // Ambil parameter dari query string
+  const { adminPass, action, idPesanan, statusBaru, idVarian, stokBaru, noResi, kurir } = req.query;
 
-  // Verifikasi admin password
-  if (!body.adminPass || body.adminPass !== ADMIN_PASS) {
-    await new Promise(r => setTimeout(r, 1000)); // delay untuk keamanan
+  if (!adminPass || adminPass !== ADMIN_PASS) {
+    await new Promise(r => setTimeout(r, 1000));
     return res.status(403).json({ status: 'error', message: 'Akses ditolak' });
   }
 
-  const { action } = body;
-
   try {
-    // Action: verifyLogin
+    // ===== VERIFY LOGIN =====
     if (action === 'verifyLogin') {
       return res.status(200).json({ status: 'success' });
     }
 
-    // Action: getAllPesanan
+    // ===== GET ALL PESANAN =====
     if (action === 'getAllPesanan') {
-      const response = await fetch(`${cleanUrl}/rest/v1/pesanan?select=*&order=tanggal.desc`, {
+      const r = await fetch(`${cleanUrl}/rest/v1/pesanan?select=*&order=tanggal.desc`, {
         headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
       });
-      const data = await response.json();
+      const data = await r.json();
       const pesanan = data.map(p => ({
         idPesanan: p.id_pesanan,
         tanggal: p.tanggal,
@@ -70,12 +54,12 @@ export default async function handler(req, res) {
       return res.status(200).json({ status: 'success', pesanan });
     }
 
-    // Action: getProdukAdmin (tanpa motif)
+    // ===== GET PRODUK ADMIN =====
     if (action === 'getProdukAdmin') {
-      const response = await fetch(`${cleanUrl}/rest/v1/produk?select=*&order=lebar.asc,tinggi_kasur.asc`, {
+      const r = await fetch(`${cleanUrl}/rest/v1/produk?select=*&order=lebar.asc,tinggi_kasur.asc`, {
         headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
       });
-      const data = await response.json();
+      const data = await r.json();
       const produk = data.map(p => ({
         id: p.id_varian,
         nama: p.nama_produk,
@@ -88,12 +72,11 @@ export default async function handler(req, res) {
       return res.status(200).json({ status: 'success', produk });
     }
 
-    // Action: updateStatus
+    // ===== UPDATE STATUS =====
     if (action === 'updateStatus') {
-      const { idPesanan, statusBaru } = body;
       const valid = ['Menunggu Pembayaran','Pembayaran Dikonfirmasi','Diproses','Dikirim','Selesai'];
-      if (!valid.includes(statusBaru)) {
-        return res.status(400).json({ status: 'error', message: 'Status tidak valid' });
+      if (!idPesanan || !statusBaru || !valid.includes(statusBaru)) {
+        return res.status(400).json({ status: 'error', message: 'Parameter idPesanan dan statusBaru diperlukan, status valid' });
       }
       await fetch(`${cleanUrl}/rest/v1/pesanan?id_pesanan=eq.${idPesanan}`, {
         method: 'PATCH',
@@ -103,9 +86,11 @@ export default async function handler(req, res) {
       return res.status(200).json({ status: 'success', idPesanan, statusBaru });
     }
 
-    // Action: updateStokAdmin (update stok produk biasa)
+    // ===== UPDATE STOK =====
     if (action === 'updateStokAdmin') {
-      const { idVarian, stokBaru } = body;
+      if (!idVarian || stokBaru === undefined) {
+        return res.status(400).json({ status: 'error', message: 'Parameter idVarian dan stokBaru diperlukan' });
+      }
       await fetch(`${cleanUrl}/rest/v1/produk?id_varian=eq.${idVarian}`, {
         method: 'PATCH',
         headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
@@ -114,9 +99,11 @@ export default async function handler(req, res) {
       return res.status(200).json({ status: 'success', idVarian, stokBaru });
     }
 
-    // Action: simpanResi
+    // ===== SIMPAN RESI =====
     if (action === 'simpanResi') {
-      const { idPesanan, noResi, kurir } = body;
+      if (!idPesanan || !noResi || !kurir) {
+        return res.status(400).json({ status: 'error', message: 'Parameter idPesanan, noResi, kurir diperlukan' });
+      }
       await fetch(`${cleanUrl}/rest/v1/pesanan?id_pesanan=eq.${idPesanan}`, {
         method: 'PATCH',
         headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
@@ -125,9 +112,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ status: 'success', idPesanan, noResi, kurir });
     }
 
-    // Jika action tidak dikenali
     return res.status(400).json({ status: 'error', message: `Action '${action}' tidak dikenal` });
-    
   } catch (err) {
     console.error('[admin]', err.message);
     return res.status(500).json({ status: 'error', message: 'Terjadi kesalahan: ' + err.message });
