@@ -1,51 +1,29 @@
-// Netlify Function - Ambil Katalog (Produk + Motif) dari Supabase
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY;
+// api/katalog.js - Ambil produk & motif dari Supabase
+export default async function handler(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Content-Type', 'application/json');
 
-exports.handler = async function(event) {
-  const headers = {
-    'Access-Control-Allow-Origin' : '*',
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-  };
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  if (req.method !== 'GET') return res.status(405).json({ status: 'error', message: 'Method not allowed' });
 
-  if (event.httpMethod === 'OPTIONS') return { statusCode: 200, headers, body: '' };
-  if (event.httpMethod !== 'GET') return { statusCode: 405, headers, body: JSON.stringify({ status: 'error', message: 'Method not allowed' }) };
+  const SUPABASE_URL = process.env.SUPABASE_URL;
+  const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY;
+  if (!SUPABASE_URL || !SUPABASE_KEY) return res.status(500).json({ status: 'error', message: 'Env tidak lengkap' });
 
   try {
-    const [resProduk, resMotif] = await Promise.all([
-      fetch(`${SUPABASE_URL}/rest/v1/produk?aktif=eq.true&select=id_varian,nama_produk,lebar,tinggi_kasur,harga,berat_gram,stok`, {
-        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
-      }),
-      fetch(`${SUPABASE_URL}/rest/v1/motif?aktif=eq.true&select=id_motif,nama_motif,foto_url`, {
-        headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` }
-      })
+    const [produkRes, motifRes] = await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/produk?aktif=eq.true&select=*`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }),
+      fetch(`${SUPABASE_URL}/rest/v1/motif?aktif=eq.true&select=*`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } })
     ]);
+    const produk = await produkRes.json();
+    const motif = await motifRes.json();
 
-    const produk = await resProduk.json();
-    const motif  = await resMotif.json();
-
-    // Format sesuai yang diharapkan HTML
-    const produkFormatted = produk.map(p => ({
-      id         : p.id_varian,
-      nama       : p.nama_produk,
-      lebar      : p.lebar,
-      tinggiKasur: p.tinggi_kasur,
-      harga      : p.harga,
-      berat      : p.berat_gram,
-      stok       : p.stok
-    }));
-
-    const motifFormatted = motif.map(m => ({
-      id     : m.id_motif,
-      nama   : m.nama_motif,
-      fotoUrl: m.foto_url
-    }));
-
-    return { statusCode: 200, headers, body: JSON.stringify({ status: 'success', produk: produkFormatted, motif: motifFormatted }) };
-
+    return res.status(200).json({
+      status: 'success',
+      produk: produk.map(p => ({ id: p.id_varian, nama: p.nama_produk, lebar: p.lebar, tinggiKasur: p.tinggi_kasur, harga: p.harga, berat: p.berat_gram, stok: p.stok })),
+      motif: motif.map(m => ({ id: m.id_motif, nama: m.nama_motif, fotoUrl: m.foto_url }))
+    });
   } catch (err) {
-    console.error('[katalog]', err.message);
-    return { statusCode: 500, headers, body: JSON.stringify({ status: 'error', message: 'Gagal memuat katalog' }) };
+    return res.status(500).json({ status: 'error', message: err.message });
   }
-};
+}
