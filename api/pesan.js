@@ -1,127 +1,88 @@
-// api/pesan.js (dengan parser body yang lebih kuat)
+// api/pesan.js - menggunakan stok per motif (tabel stok_produk)
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'application/json');
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') return res.status(405).json({ status: 'error', message: 'Method not allowed' });
 
-  // Baca raw body terlebih dahulu
-  let rawBody = '';
-  try {
-    const buffers = [];
-    for await (const chunk of req) buffers.push(chunk);
-    rawBody = Buffer.concat(buffers).toString();
-  } catch (err) {
-    return res.status(400).json({ status: 'error', message: 'Gagal membaca body: ' + err.message });
-  }
-
-  // Bersihkan: hapus kutip diawal/akhir jika ada (misal jika body berupa string JSON yang dikutip)
-  let cleanBody = rawBody.trim();
-  if ((cleanBody.startsWith('"') && cleanBody.endsWith('"')) || 
-      (cleanBody.startsWith("'") && cleanBody.endsWith("'"))) {
-    cleanBody = cleanBody.slice(1, -1);
-  }
-  // Unescape jika perlu
-  cleanBody = cleanBody.replace(/\\"/g, '"');
-
-  let body;
-  try {
-    body = JSON.parse(cleanBody);
-  } catch (err) {
-    return res.status(400).json({
-      status: 'error',
-      message: 'Body tidak valid JSON: ' + err.message,
-      raw: rawBody.substring(0, 100)
-    });
+  // Baca body
+  let body = req.body;
+  if (!body || typeof body !== 'object') {
+    try { body = JSON.parse(req.body); } catch { return res.status(400).json({ status: 'error', message: 'Body tidak valid' }); }
   }
 
   const { idVarian, idMotif, namaPembeli, noWhatsApp, alamat, kotaTujuan, jumlahBeli } = body;
-
   if (!idVarian || !idMotif || !namaPembeli || !noWhatsApp || !alamat || !kotaTujuan || !jumlahBeli) {
-    return res.status(400).json({
-      status: 'error',
-      message: 'Data tidak lengkap',
-      received: Object.keys(body)
-    });
+    return res.status(400).json({ status: 'error', message: 'Data tidak lengkap' });
   }
 
-  // Environment variables
   let supabaseUrl = process.env.SUPABASE_URL || '';
-  supabaseUrl = supabaseUrl.replace(/\/rest\/v1\/?$/, '');
+  supabaseUrl = supabaseUrl.replace(/\/rest\/v1\/?$/, '').replace(/\/$/, '');
   const supabaseKey = process.env.SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !supabaseKey) {
-    return res.status(500).json({ status: 'error', message: 'Env tidak lengkap' });
-  }
+  if (!supabaseUrl || !supabaseKey) return res.status(500).json({ status: 'error', message: 'Env tidak lengkap' });
 
   try {
-    // Cek produk
-    const prodRes = await fetch(`${supabaseUrl}/rest/v1/produk?id_varian=eq.${idVarian}&aktif=eq.true&select=harga,stok`, {
+    // 1. Ambil harga produk dari tabel produk
+    const produkRes = await fetch(`${supabaseUrl}/rest/v1/produk?id_varian=eq.${idVarian}&select=harga`, {
       headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` }
     });
-    const produkArr = await prodRes.json();
-    if (!produkArr.length) {
-      return res.status(400).json({ status: 'error', message: `Varian '${idVarian}' tidak ditemukan` });
+    const produkArr = await produkRes.json();
+    if (!produkArr.length) return res.status(400).json({ status: 'error', message: `Varian '${idVarian}' tidak ditemukan` });
+    const harga = produkArr[0].harga;
+
+    // 2. Cek stok dari tabel stok_produk
+    const stokRes = await fetch(`${supabaseUrl}/rest/v1/stok_produk?id_varian=eq.${idVarian}&id_motif=eq.${idMotif}&select=stok`, {
+      headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` }
+    });
+    let stokData = await stokRes.json();
+    let stokTersedia = 0;
+    if (stokData && stokData.length > 0) {
+      stokTersedia = stokData[0].stok;
+    } else {
+      // Jika belum ada entri, buat dengan stok 0
+      await fetch(`${supabaseUrl}/rest/v1/stok_produk`, {
+        method: 'POST',
+        headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id_varian: idVarian, id_motif: idMotif, stok: 0 })
+      });
+      stokTersedia = 0;
     }
 
-    const produk = produkArr[0];
     const jumlah = parseInt(jumlahBeli);
-    if (produk.stok < jumlah) {
-      return res.status(400).json({ status: 'error', message: `Stok hanya ${produk.stok} pcs` });
+    if (stokTersedia < jumlah) {
+      return res.status(400).json({ status: 'error', message: `Stok hanya ${stokTersedia} pcs untuk kombinasi ini` });
     }
 
-    const totalHarga = produk.harga * jumlah;
+    const totalHarga = harga * jumlah;
     const idPesanan = `ORD-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${Math.floor(Math.random()*9000+1000)}`;
 
-    // Simpan pesanan
+    // 3. Simpan pesanan
     const simpanRes = await fetch(`${supabaseUrl}/rest/v1/pesanan`, {
       method: 'POST',
-      headers: {
-        apikey: supabaseKey,
-        Authorization: `Bearer ${supabaseKey}`,
-        'Content-Type': 'application/json',
-        Prefer: 'return=minimal'
-      },
+      headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
       body: JSON.stringify({
-        id_pesanan: idPesanan,
-        nama_pembeli: namaPembeli,
-        no_whatsapp: noWhatsApp,
-        id_varian: idVarian,
-        id_motif: idMotif,
-        jumlah_beli: jumlah,
-        total_harga: totalHarga,
-        alamat,
-        kota_tujuan: kotaTujuan,
-        status: 'Menunggu Pembayaran'
+        id_pesanan: idPesanan, nama_pembeli: namaPembeli, no_whatsapp: noWhatsApp,
+        id_varian: idVarian, id_motif: idMotif, jumlah_beli: jumlah, total_harga: totalHarga,
+        alamat, kota_tujuan: kotaTujuan, status: 'Menunggu Pembayaran'
       })
     });
-    if (!simpanRes.ok) {
-      const errText = await simpanRes.text();
-      throw new Error(`Gagal simpan pesanan: ${simpanRes.status} - ${errText}`);
-    }
+    if (!simpanRes.ok) throw new Error('Gagal simpan pesanan');
 
-    // Kurangi stok
-    await fetch(`${supabaseUrl}/rest/v1/produk?id_varian=eq.${idVarian}`, {
+    // 4. Kurangi stok
+    const stokBaru = stokTersedia - jumlah;
+    await fetch(`${supabaseUrl}/rest/v1/stok_produk?id_varian=eq.${idVarian}&id_motif=eq.${idMotif}`, {
       method: 'PATCH',
-      headers: {
-        apikey: supabaseKey,
-        Authorization: `Bearer ${supabaseKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ stok: produk.stok - jumlah })
+      headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stok: stokBaru })
     });
 
-    // Google Sheets sync (opsional)
+    // 5. Sync ke Google Sheets (opsional)
     const GAS_URL = process.env.GAS_URL;
     if (GAS_URL) {
       fetch(GAS_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
-        body: JSON.stringify({
-          action: 'syncPesanan',
-          idPesanan, namaPembeli, noWhatsApp,
-          idVarian, idMotif, jumlahBeli: jumlah,
-          totalHarga, alamat, kotaTujuan
-        })
+        body: JSON.stringify({ action: 'syncPesanan', idPesanan, namaPembeli, noWhatsApp, idVarian, idMotif, jumlahBeli: jumlah, totalHarga, alamat, kotaTujuan })
       }).catch(e => console.error('Sync GAS gagal:', e.message));
     }
 
